@@ -1,0 +1,37 @@
+@startuml architecture
+title node-hmac-auth-core (HMAC auth primitives, no propagation)
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "Application code" as APP {
+  [Source app]    as SRC
+  [Target app]    as TGT
+}
+
+package "Library" as LIB {
+  [createHttpSignedFetchClient] as SIGN
+  [verifyHttpRequest / verifyHttpSignature] as VERIFY
+  [clients CRUD (HTTP + message)] as CRUD
+  [signMessage / verifyMessage] as MSG
+}
+
+database "Redis (source)"  as RSRC
+database "Redis (target)"  as RTGT
+
+SRC --> SIGN : "build signed outbound\nfetch using clientId"
+SIGN --> TGT : "HTTP request\nwith x-client-id / x-timestamp / x-nonce / x-signature"
+TGT --> VERIFY : "validate"
+VERIFY --> RTGT : "lookup secretHash + nonce"
+
+SRC --> CRUD : "create / regenerate / setSecret / revert"
+CRUD --> RSRC : "credential record + backup TTL"
+
+note bottom of LIB
+  Propagation between Source and Target is NOT this lib's concern.
+  The application controls how the secretHash reaches the target
+  (admin endpoint, infrastructure push, or the companion package
+  @naskot/node-hmac-auth-core-propagation).
+end note
+
+@enduml
