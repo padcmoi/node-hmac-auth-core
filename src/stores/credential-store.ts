@@ -80,7 +80,6 @@ export class RedisCredentialStore {
       updatedAt: now,
       expiresAt: existing?.expiresAt ?? null,
       allowedIps: existing?.allowedIps ?? [],
-      fromDbSeed: existing?.fromDbSeed ?? false,
     });
   }
 

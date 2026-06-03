@@ -4,13 +4,8 @@ import type {
   HmacClientCredential,
   HmacClientCredentialWithSecret,
   HmacCredentialRevertResult,
-  HmacCredentialWriteOptions,
-  HmacInternalManagementRequestInput,
-  HmacInternalManagementRequestResult,
   InitializeHmacHttpAuthOptions,
   OnBadHttpSignature,
-  PropagateHmacClientOptions,
-  PropagateHmacClientResult,
   RegenerateHmacSecretOptions,
   VerifiedHttpRequest,
   VerifyHttpWithRedisInput,
@@ -22,16 +17,9 @@ import {
   type CreateHttpSignedFetchClientOptions,
   type SignedHttpFetchClientCallOptions,
 } from "./client/signed-fetch.js";
-import {
-  DEFAULT_DB_SEED_BACKUP_TTL_SECONDS,
-  DEFAULT_MAX_SKEW_MS,
-  DEFAULT_PROPAGATION_KEY_CLIENT_ID,
-  DEFAULT_SECRET_LENGTH_BYTES,
-} from "./constants.js";
-import { assertSecretLength, normalizeRoutePath } from "./internal-helpers.js";
-import { createInternalManagementHandler } from "./internal-management.js";
-import { createHttpMiddlewareFactory, createInternalManagementMiddlewareFactory } from "./middlewares.js";
-import { createPropagateClientToApis } from "./propagate.js";
+import { DEFAULT_DB_SEED_BACKUP_TTL_SECONDS, DEFAULT_MAX_SKEW_MS, DEFAULT_SECRET_LENGTH_BYTES } from "./constants.js";
+import { assertSecretLength } from "./internal-helpers.js";
+import { createHttpMiddlewareFactory } from "./middlewares.js";
 import { verifyHttpSignature as verifyHttpSignatureCore } from "./server/verify.js";
 
 export interface InitializedHmacHttpAuth {
@@ -39,7 +27,6 @@ export interface InitializedHmacHttpAuth {
   readonly namespace: string;
   readonly maxSkewMs: number;
   readonly secretToken?: string;
-  readonly internalManagementRoute?: string;
   verifyHttpRequest: (req: any, res: any, next: (error?: unknown) => void) => Promise<void>;
   verifyHttpSignature: (input: VerifyHttpWithRedisInput) => Promise<VerifiedHttpRequest>;
   createHttpMiddleware: (options?: {
@@ -54,20 +41,6 @@ export interface InitializedHmacHttpAuth {
     onError?: (error: HmacAuthError, req: any, res: any, next: (error?: unknown) => void) => void;
     onBadSignature?: OnBadHttpSignature;
   }) => (req: any, res: any, next: (error?: unknown) => void) => Promise<void>;
-  handleInternalManagementRequest: (input: HmacInternalManagementRequestInput) => Promise<HmacInternalManagementRequestResult>;
-  createInternalManagementMiddleware: (options?: {
-    attachAuthTo?: string;
-    maxSkewMs?: number;
-    onError?: (error: HmacAuthError, req: any, res: any, next: (error?: unknown) => void) => void;
-    onBadSignature?: OnBadHttpSignature;
-  }) => (req: any, res: any, next: (error?: unknown) => void) => Promise<void>;
-  createExpressInternalManagementMiddleware: (options?: {
-    attachAuthTo?: string;
-    maxSkewMs?: number;
-    onError?: (error: HmacAuthError, req: any, res: any, next: (error?: unknown) => void) => void;
-    onBadSignature?: OnBadHttpSignature;
-  }) => (req: any, res: any, next: (error?: unknown) => void) => Promise<void>;
-  propagateClientToApis: (options: PropagateHmacClientOptions) => Promise<PropagateHmacClientResult[]>;
   createHttpSignedFetchClient: (
     options: CreateHttpSignedFetchClientOptions
   ) => (url: string, options?: SignedHttpFetchClientCallOptions) => Promise<Response>;
@@ -77,19 +50,12 @@ export interface InitializedHmacHttpAuth {
     get: (clientId: string) => Promise<HmacClientCredential | null>;
     delete: (clientId: string) => Promise<void>;
     regenerateSecret: (clientId: string, options?: RegenerateHmacSecretOptions) => Promise<HmacClientCredentialWithSecret>;
-    setSecret: (
-      clientId: string,
-      secret: string,
-      expiresAt?: number | Date | null,
-      allowedIps?: string[],
-      options?: HmacCredentialWriteOptions
-    ) => Promise<void>;
+    setSecret: (clientId: string, secret: string, expiresAt?: number | Date | null, allowedIps?: string[]) => Promise<void>;
     setSecretHash: (
       clientId: string,
       secretHash: string,
       expiresAt?: number | Date | null,
-      allowedIps?: string[],
-      options?: HmacCredentialWriteOptions
+      allowedIps?: string[]
     ) => Promise<void>;
     setAllowedIps: (clientId: string, allowedIps: string[]) => Promise<void>;
     getSecretHash: (clientId: string) => Promise<string | null>;
@@ -109,21 +75,8 @@ export function initializeHmacHttpAuth(options: InitializeHmacHttpAuthOptions): 
   const defaultSecretLengthBytes = options.defaultSecretLengthBytes ?? DEFAULT_SECRET_LENGTH_BYTES;
   const dbSeedBackupTtlSeconds = options.dbSeedBackupTtlSeconds ?? DEFAULT_DB_SEED_BACKUP_TTL_SECONDS;
   const secretToken = options.secretToken;
-  const internalManagementRoute =
-    typeof options.internalManagementRoute === "string" && options.internalManagementRoute.trim()
-      ? normalizeRoutePath(options.internalManagementRoute)
-      : undefined;
   assertSecretLength(defaultSecretLengthBytes);
   const credentialStore = new RedisCredentialStore(options.redis, namespace);
-  const messageAuth = options.messageAuth;
-  // v1.4.0: federation-default clientId for the bootstrap lock. Consumers may
-  // override via `requireBootstrapClientId` (intentional isolation), but the
-  // omitted-default is ALWAYS the canonical name so an out-of-the-box install
-  // joins the federation automatically.
-  const requireBootstrapClientId =
-    typeof options.requireBootstrapClientId === "string" && options.requireBootstrapClientId.trim()
-      ? options.requireBootstrapClientId.trim()
-      : DEFAULT_PROPAGATION_KEY_CLIENT_ID;
 
   const verifyHttpSignature = async (input: VerifyHttpWithRedisInput): Promise<VerifiedHttpRequest> =>
     verifyHttpSignatureCore({
@@ -133,8 +86,6 @@ export function initializeHmacHttpAuth(options: InitializeHmacHttpAuthOptions): 
       maxSkewMs: input.maxSkewMs ?? maxSkewMs,
       onBadSignature: input.onBadSignature ?? options.onBadSignature,
       metadata: input.metadata,
-      internalManagementRoute,
-      requireBootstrapClientId: input.requireBootstrapClientId ?? requireBootstrapClientId,
     });
 
   const clients = createCredentialsClientsFactory({
@@ -149,48 +100,19 @@ export function initializeHmacHttpAuth(options: InitializeHmacHttpAuthOptions): 
     namespace,
     maxSkewMs,
     defaultOnBadSignature: options.onBadSignature,
-    internalManagementRoute,
-    requireBootstrapClientId,
   });
 
   const verifyHttpRequest = httpMiddlewareFactory();
-
-  const handleInternalManagementRequest = createInternalManagementHandler({
-    clients,
-    messageAuth,
-    internalManagementRoute,
-    namespace,
-    verifyHttpSignature,
-    requireBootstrapClientId,
-  });
-
-  const internalManagementMiddlewareFactory = createInternalManagementMiddlewareFactory({
-    handleInternalManagementRequest,
-    maxSkewMs,
-    defaultOnBadSignature: options.onBadSignature,
-  });
-
-  const propagateClientToApis = createPropagateClientToApis({
-    internalManagementRoute,
-    credentialStore,
-    messageAuth,
-    secretToken,
-  });
 
   return {
     redis: options.redis,
     namespace,
     maxSkewMs,
     secretToken,
-    internalManagementRoute,
     verifyHttpRequest,
     verifyHttpSignature,
     createHttpMiddleware: httpMiddlewareFactory,
     createExpressHttpMiddleware: httpMiddlewareFactory,
-    handleInternalManagementRequest,
-    createInternalManagementMiddleware: internalManagementMiddlewareFactory,
-    createExpressInternalManagementMiddleware: internalManagementMiddlewareFactory,
-    propagateClientToApis,
     createHttpSignedFetchClient: (clientOptions) =>
       createHttpSignedFetchClient({
         ...clientOptions,

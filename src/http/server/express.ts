@@ -10,13 +10,6 @@ export interface ExpressHmacMiddlewareOptions {
   attachAuthTo?: string;
   onError?: (error: HmacAuthError, req: any, res: any, next: (error?: unknown) => void) => void;
   onBadSignature?: OnBadHttpSignature;
-  /** v1.3.0: passed through to `verifyHttpSignature` for purpose cantonment. */
-  internalManagementRoute?: string;
-  /**
-   * v1.4.0: federation-default bootstrap clientId. Omit to inherit the
-   * canonical `DEFAULT_PROPAGATION_KEY_CLIENT_ID`; override to isolate.
-   */
-  requireBootstrapClientId?: string;
 }
 
 export type HttpHmacMiddlewareOptions = ExpressHmacMiddlewareOptions;
@@ -76,8 +69,6 @@ export function createExpressHttpHmacMiddleware(options: ExpressHmacMiddlewareOp
         maxSkewMs: options.maxSkewMs,
         onBadSignature: options.onBadSignature,
         metadata: fallbackMetadata(req),
-        internalManagementRoute: options.internalManagementRoute,
-        requireBootstrapClientId: options.requireBootstrapClientId,
       });
 
       req[attachAuthTo] = verified;

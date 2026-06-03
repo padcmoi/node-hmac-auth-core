@@ -7,7 +7,6 @@ import type {
   HmacClientCredential,
   HmacClientCredentialWithSecret,
   HmacCredentialRevertResult,
-  HmacCredentialWriteOptions,
   RegenerateHmacSecretOptions,
 } from "../core/types.js";
 import { type RedisCredentialStore, type StoredClientCredentialRecord } from "./redis.js";
@@ -19,15 +18,13 @@ import { type RedisCredentialStore, type StoredClientCredentialRecord } from "./
  * `initializeHmacMessageAuth`. Both stores share the exact same credential
  * lifecycle (create / regenerate / setSecret / setSecretHash / setAllowedIps /
  * get / list / delete / revert) on top of an underlying `RedisCredentialStore`;
- * only the Redis namespace and the `secretToken` differ. Centralizing the
- * implementation here eliminates 200+ lines of duplication between the two
- * `init.ts` files and guarantees the two surfaces stay in lockstep when the
- * lifecycle evolves.
+ * only the Redis namespace and the `secretToken` differ.
  *
  * `secretToken` is the optional `HMAC_SECRET_TOKEN` propagated to
  * `hashClientSecret`. `dbSeedBackupTtlSeconds` controls the TTL of the
- * backup key written when `setSecret`/`setSecretHash` rotates a credential
- * that carries `fromDbSeed: true`.
+ * backup key written before every `setSecret` / `setSecretHash` that actually
+ * changes the stored hash; it is the window in which `clients.revert(clientId)`
+ * can restore the previous secretHash.
  */
 export interface CreateCredentialsClientsFactoryDeps {
   credentialStore: RedisCredentialStore;
@@ -42,20 +39,8 @@ export interface HmacCredentialsStoreClients {
   get: (clientId: string) => Promise<HmacClientCredential | null>;
   delete: (clientId: string) => Promise<void>;
   regenerateSecret: (clientId: string, options?: RegenerateHmacSecretOptions) => Promise<HmacClientCredentialWithSecret>;
-  setSecret: (
-    clientId: string,
-    secret: string,
-    expiresAt?: number | Date | null,
-    allowedIps?: string[],
-    options?: HmacCredentialWriteOptions
-  ) => Promise<void>;
-  setSecretHash: (
-    clientId: string,
-    secretHash: string,
-    expiresAt?: number | Date | null,
-    allowedIps?: string[],
-    options?: HmacCredentialWriteOptions
-  ) => Promise<void>;
+  setSecret: (clientId: string, secret: string, expiresAt?: number | Date | null, allowedIps?: string[]) => Promise<void>;
+  setSecretHash: (clientId: string, secretHash: string, expiresAt?: number | Date | null, allowedIps?: string[]) => Promise<void>;
   setAllowedIps: (clientId: string, allowedIps: string[]) => Promise<void>;
   getSecretHash: (clientId: string) => Promise<string | null>;
   revert: (clientId: string) => Promise<HmacCredentialRevertResult>;
@@ -108,8 +93,6 @@ function mapCredential(clientId: string, record: StoredClientCredentialRecord): 
     updatedAt: record.updatedAt,
     expiresAt: record.expiresAt,
     allowedIps: record.allowedIps,
-    fromDbSeed: record.fromDbSeed,
-    purpose: record.purpose,
   };
 }
 
@@ -134,8 +117,6 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
         updatedAt: now,
         expiresAt: normalizeExpiresAt(createOptions.expiresAt),
         allowedIps: normalizeAllowedIpRules(createOptions.allowedIps),
-        fromDbSeed: createOptions.fromDbSeed === true,
-        purpose: createOptions.purpose,
       };
 
       await credentialStore.setClientRecord(createOptions.clientId, record);
@@ -186,8 +167,13 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
             ? null
             : existing.expiresAt;
 
+      const newSecretHash = hashClientSecret(secret, secretToken);
+      if (existing.secretHash !== newSecretHash) {
+        await credentialStore.setBackupSecretHash(clientId, existing.secretHash, dbSeedBackupTtlSeconds);
+      }
+
       const updatedRecord: StoredClientCredentialRecord = {
-        secretHash: hashClientSecret(secret, secretToken),
+        secretHash: newSecretHash,
         createdAt: existing.createdAt || now,
         updatedAt: now,
         expiresAt,
@@ -195,8 +181,6 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
           regenerateOptions?.allowedIps !== undefined
             ? normalizeAllowedIpRules(regenerateOptions.allowedIps)
             : existing.allowedIps,
-        fromDbSeed: existing.fromDbSeed,
-        purpose: existing.purpose,
       };
 
       await credentialStore.setClientRecord(clientId, updatedRecord);
@@ -206,17 +190,15 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
       };
     },
 
-    setSecret: async (clientId, secret, expiresAt, allowedIps, writeOptions) => {
+    setSecret: async (clientId, secret, expiresAt, allowedIps) => {
       assertClientId(clientId);
       const now = Date.now();
       const existing = await credentialStore.getClientRecord(clientId);
       const newSecretHash = hashClientSecret(secret, secretToken);
-      // v1.2.0: db-seeded rotations write a TTL backup of the previous hash
-      // before overwriting, so `clients.revert(clientId)` (or a PATCH on the
-      // internal management route) can restore the pre-rotation state if a
-      // partial-failure scenario occurs. No backup is written for static
-      // credentials (fromDbSeed=false) - those never need rollback.
-      if (writeOptions?.fromDbSeed === true && existing && existing.secretHash !== newSecretHash) {
+      // Whenever the stored hash actually changes, write a TTL backup of the
+      // previous hash so `clients.revert(clientId)` can roll back within the
+      // dbSeedBackupTtlSeconds window.
+      if (existing && existing.secretHash !== newSecretHash) {
         await credentialStore.setBackupSecretHash(clientId, existing.secretHash, dbSeedBackupTtlSeconds);
       }
       const record: StoredClientCredentialRecord = {
@@ -225,18 +207,16 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
         updatedAt: now,
         expiresAt: expiresAt === undefined ? (existing?.expiresAt ?? null) : normalizeExpiresAt(expiresAt),
         allowedIps: allowedIps === undefined ? (existing?.allowedIps ?? []) : normalizeAllowedIpRules(allowedIps),
-        fromDbSeed: writeOptions?.fromDbSeed ?? existing?.fromDbSeed ?? false,
-        purpose: writeOptions?.purpose ?? existing?.purpose,
       };
       await credentialStore.setClientRecord(clientId, record);
     },
 
-    setSecretHash: async (clientId, secretHash, expiresAt, allowedIps, writeOptions) => {
+    setSecretHash: async (clientId, secretHash, expiresAt, allowedIps) => {
       assertClientId(clientId);
       const now = Date.now();
       const existing = await credentialStore.getClientRecord(clientId);
       const normalizedHash = normalizeSecretHash(secretHash);
-      if (writeOptions?.fromDbSeed === true && existing && existing.secretHash !== normalizedHash) {
+      if (existing && existing.secretHash !== normalizedHash) {
         await credentialStore.setBackupSecretHash(clientId, existing.secretHash, dbSeedBackupTtlSeconds);
       }
       const record: StoredClientCredentialRecord = {
@@ -245,8 +225,6 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
         updatedAt: now,
         expiresAt: expiresAt === undefined ? (existing?.expiresAt ?? null) : normalizeExpiresAt(expiresAt),
         allowedIps: allowedIps === undefined ? (existing?.allowedIps ?? []) : normalizeAllowedIpRules(allowedIps),
-        fromDbSeed: writeOptions?.fromDbSeed ?? existing?.fromDbSeed ?? false,
-        purpose: writeOptions?.purpose ?? existing?.purpose,
       };
       await credentialStore.setClientRecord(clientId, record);
     },
@@ -265,8 +243,6 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
         updatedAt: now,
         expiresAt: existing.expiresAt ?? null,
         allowedIps: normalizeAllowedIpRules(allowedIps),
-        fromDbSeed: existing.fromDbSeed,
-        purpose: existing.purpose,
       };
 
       await credentialStore.setClientRecord(clientId, record);
@@ -297,8 +273,6 @@ export function createCredentialsClientsFactory(deps: CreateCredentialsClientsFa
         updatedAt: now,
         expiresAt: existing.expiresAt ?? null,
         allowedIps: existing.allowedIps,
-        fromDbSeed: existing.fromDbSeed,
-        purpose: existing.purpose,
       };
       await credentialStore.setClientRecord(clientId, record);
       await credentialStore.clearBackupSecretHash(clientId);
