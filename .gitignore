@@ -1,0 +1,27 @@
+node_modules
+dist
+coverage
+.tsbuildinfo
+.tsup
+.nyc_output
+
+# Scratch space (specs, plans, drafts, antipatterns) — never committed
+.trash/
+
+# Lockfile-less by design for a library; consumers own their lockfile
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
