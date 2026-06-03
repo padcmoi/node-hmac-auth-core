@@ -1,0 +1,67 @@
+name: node-hmac-auth-core-poc
+
+services:
+  redis-source:
+    image: redis:7-alpine
+    networks: [meshnet]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis-target:
+    image: redis:7-alpine
+    networks: [meshnet]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  target:
+    build:
+      context: ..
+      dockerfile: poc/target/Dockerfile
+    environment:
+      PORT: "3000"
+      REDIS_URL: "redis://redis-target:6379"
+      HMAC_NAMESPACE: "hmac-target"
+      HMAC_SECRET_TOKEN: "shared-pepper-do-not-leak"
+      PROVISIONER_CLIENT_ID: "admin_provisioner"
+      PROVISIONER_SECRET: "provisioner-shared-secret-do-not-leak"
+    depends_on:
+      redis-target:
+        condition: service_healthy
+    networks: [meshnet]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://localhost:3000/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  source:
+    build:
+      context: ..
+      dockerfile: poc/source/Dockerfile
+    environment:
+      REDIS_URL: "redis://redis-source:6379"
+      HMAC_NAMESPACE: "hmac-source"
+      HMAC_SECRET_TOKEN: "shared-pepper-do-not-leak"
+      TARGET_BASE_URL: "http://target:3000"
+      PROVISIONER_CLIENT_ID: "admin_provisioner"
+      PROVISIONER_SECRET: "provisioner-shared-secret-do-not-leak"
+    depends_on:
+      redis-source:
+        condition: service_healthy
+      target:
+        condition: service_healthy
+    networks: [meshnet]
+    restart: "no"
+
+networks:
+  meshnet:
