@@ -21,9 +21,31 @@ async function bootstrap() {
   const hmac = app.get(HmacAuthService);
   await hmac.init();
 
+  // The /api/restricted route is locked to the allowlist via the runtime helper.
+  // Other registered clientIds reach the verify step OK but are rejected here.
+  const allowlistMiddleware = hmac.runtime.hmacHttpMiddleware("toto", "dudu");
+
+  // Wrap the runtime helper: it throws a plain Error synchronously when the
+  // clientId is outside its allowlist. Express does not auto-forward thrown
+  // errors from async middleware, so we catch and forward to the error handler.
+  const wrappedAllowlist = async (req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> => {
+    try {
+      await allowlistMiddleware(req, res, next);
+    } catch (err) {
+      next(err);
+    }
+  };
+
   // Register HMAC middlewares BEFORE app.init() so they run before Nest's router.
   app.use("/api/admin", hmac.http.verifyHttpRequest);
   app.use("/api/echo", hmac.http.verifyHttpRequest);
+  app.use("/api/restricted", wrappedAllowlist);
+
+  // Translate any Error thrown inside allowlistMiddleware into a 403 response.
+  app.use("/api/restricted", (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const message = err instanceof Error ? err.message : "Forbidden";
+    res.status(403).json({ error: "FORBIDDEN", message });
+  });
 
   // Init Nest (registers controllers and the rest of the routing).
   await app.init();
