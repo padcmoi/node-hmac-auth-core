@@ -92,6 +92,12 @@ admin call, runs business calls, rotates, verifies rejection of the old secret,
 reverts, verifies acceptance of the original secret again. Exit code 0 when the
 five steps succeed.
 
+## Compatibility
+
+| `@naskot/node-hmac-auth-core` | `@naskot/node-hmac-auth-core-propagation` |
+| ----------------------------- | ----------------------------------------- |
+| `1.0.0`                       | `1.0.0`                                   |
+
 ## Background
 
 This package is the epured fork of [`@naskot/node-hmac-auth`](https://github.com/padcmoi/node-hmac-auth) 1.4.0.

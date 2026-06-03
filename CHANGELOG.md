@@ -37,6 +37,12 @@ First release. Epured fork of `@naskot/node-hmac-auth` 1.4.0: same auth wire, pr
 - The rotation backup is now unconditional. Upstream wrote a backup only when `fromDbSeed: true` was passed; the fork writes a backup whenever the stored hash actually changes. `revert` keeps the same semantics.
 - For credential propagation between peers, use the companion package `@naskot/node-hmac-auth-core-propagation` (RabbitMQ-backed orchestrator that consumes this lib as a peer dep).
 
+### Compatibility
+
+| `@naskot/node-hmac-auth-core` | `@naskot/node-hmac-auth-core-propagation` |
+| ----------------------------- | ----------------------------------------- |
+| `1.0.0`                       | `1.0.0`                                   |
+
 ### POC
 
 `poc/docker-compose.yml` runs one source + one target + one Redis each. Source provisions `client_demo`, pushes its `secretHash` via a signed admin endpoint, exercises business calls, rotation with rejection of the stale secret, and revert with re-acceptance of the original secret. Then a second scenario covers a 4-clientId / 5-clientId asymmetric setup with an allowlist-restricted route. Exit 0 on success.
