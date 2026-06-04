@@ -1,5 +1,12 @@
 # @naskot/node-hmac-auth-core
 
+[![npm version](https://img.shields.io/npm/v/%40naskot%2Fnode-hmac-auth-core?style=flat-square&color=cb3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/@naskot/node-hmac-auth-core)
+[![TypeScript Ready](https://img.shields.io/badge/TypeScript-Ready-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Redis required](https://img.shields.io/badge/Redis-required-dc382d?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![runtime deps 0](https://img.shields.io/badge/runtime%20deps-0-3da639?style=flat-square)](./package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3da639?style=flat-square)](https://opensource.org/licenses/MIT)
+
 Pure HMAC auth primitives for Node.js APIs and microservices: sign outbound
 requests, verify inbound requests, manage credentials (HTTP + message tracks)
 against a Redis store. Framework-agnostic. Zero runtime dependencies.
